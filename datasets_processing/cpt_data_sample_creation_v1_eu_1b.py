@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Create the CPT-V1-EU-1B document-level JSONL dataset.
+"""Create a configurable legal-domain CPT document-level JSONL dataset.
 
-The default mixture uses every eligible EU document from MultiLegalPile
-Commercial and approximately 140M estimated replay tokens sampled across all
-SlimPajama training shards. Token budgets use 1.3 * whitespace-delimited words;
-the final manifest reports achieved estimates and must not be confused with an
-exact model-tokenizer count.
+The backward-compatible defaults create CPT-V1-EU-1B: every eligible EU
+document from MultiLegalPile Commercial plus approximately 140M estimated
+SlimPajama replay tokens. ``--types``, ``--jurisdictions``, and
+``--slimpajama-ratio`` support other mixtures. Token budgets use 1.3 times
+whitespace-delimited words and are not exact model-tokenizer counts.
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SOURCE_ROOT = PROJECT_ROOT / "src"
 if sys.version_info < (3, 12):
     raise SystemExit(
-        "CPT-V1-EU creation with the vendored text-dedup package requires Python 3.12+. "
+        "CPT creation with the vendored text-dedup package requires Python 3.12+. "
         f"Current interpreter: {sys.executable} ({sys.version.split()[0]}). "
         f"Run with: {PROJECT_ROOT / '.venv/bin/python'}"
     )
@@ -94,9 +94,10 @@ class RotatingJsonlWriter:
 class FinalShardWriter:
     """Write final shards bounded by estimated-token budget."""
 
-    def __init__(self, output_dir: Path, target_tokens: int) -> None:
+    def __init__(self, output_dir: Path, target_tokens: int, output_prefix: str) -> None:
         self.output_dir = output_dir
         self.target_tokens = target_tokens
+        self.output_prefix = output_prefix
         self._file: TextIO | None = None
         self._hasher: Any = None
         self._path: Path | None = None
@@ -144,7 +145,7 @@ class FinalShardWriter:
 
     def _rotate(self) -> None:
         self.close_current()
-        self._path = self.output_dir / f"cpt-v1-eu-1b-{len(self.shards):05d}.jsonl"
+        self._path = self.output_dir / f"{self.output_prefix}-{len(self.shards):05d}.jsonl"
         self._file = self._path.open("w", encoding="utf-8", buffering=1024 * 1024)
         self._hasher = hashlib.sha256()
         self._rows = 0
@@ -170,12 +171,34 @@ class FinalShardWriter:
         self.close_current()
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--legal-dir", type=Path, default=DEFAULT_LEGAL_DIR)
     parser.add_argument("--replay-dir", type=Path, default=DEFAULT_REPLAY_DIR)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
+    parser.add_argument("--dataset-name", default="CPT-V1-EU-1B")
+    parser.add_argument("--output-prefix", default="cpt-v1-eu-1b")
+    parser.add_argument(
+        "--types",
+        dest="legal_types",
+        nargs="+",
+        help="Legal document types to include, or ALL (default: all types)",
+    )
+    parser.add_argument(
+        "--jurisdictions",
+        dest="legal_jurisdictions",
+        nargs="+",
+        default=["EU"],
+        help="Legal jurisdictions to include, or ALL (default: EU)",
+    )
     parser.add_argument("--replay-target-tokens", type=int, default=DEFAULT_REPLAY_TARGET)
+    parser.add_argument(
+        "--slimpajama-ratio",
+        "--slimpajama-rato",
+        dest="slimpajama_ratio",
+        type=float,
+        help="Deterministic fraction of SlimPajama rows to select, from 0 to 1; overrides replay target",
+    )
     parser.add_argument("--shard-target-tokens", type=int, default=DEFAULT_OUTPUT_SHARD_TARGET)
     parser.add_argument("--kenlm-model", type=Path)
     parser.add_argument("--perplexity-threshold", type=float, default=1500.0)
@@ -216,7 +239,42 @@ def parse_args() -> argparse.Namespace:
         type=int,
         help="Testing only: stop after scanning this many replay input rows",
     )
-    return parser.parse_args()
+    args = parser.parse_args(argv)
+    args.legal_types = normalize_selection_values(args.legal_types, kind="type")
+    args.legal_jurisdictions = normalize_selection_values(args.legal_jurisdictions, kind="jurisdiction")
+    return args
+
+
+def normalize_selection_values(values: list[str] | None, *, kind: str) -> set[str] | None:
+    """Normalize comma/space-separated selection values; None means select all."""
+
+    if not values:
+        return None
+    flattened = [item.strip() for value in values for item in value.split(",") if item.strip()]
+    if any(item.casefold() in {"all", "*"} for item in flattened):
+        return None
+    if kind == "type":
+        aliases = {
+            "case law": "caselaw",
+            "case-law": "caselaw",
+            "case_law": "caselaw",
+            "caselaw": "caselaw",
+            "other": "other",
+            "contracts": "contracts",
+            "legislation": "legislation",
+            "legal-mc4": "legal-mc4",
+            "legal_mc4": "legal-mc4",
+        }
+        return {aliases.get(item.casefold(), item.casefold()) for item in flattened}
+    jurisdiction_names = {
+        "us": "US",
+        "n/a": "N/A",
+        "na": "N/A",
+        "eu": "EU",
+        "uk": "UK",
+        "switzerland": "Switzerland",
+    }
+    return {jurisdiction_names.get(item.casefold(), item) for item in flattened}
 
 
 def count_words(text: str) -> int:
@@ -238,6 +296,24 @@ def estimate_tokens(text: str) -> int:
 def stable_id(corpus: str, source_file: str, source_row: int) -> str:
     payload = f"{corpus}\0{source_file}\0{source_row}".encode("utf-8")
     return "sha256:" + hashlib.sha256(payload).hexdigest()
+
+
+def legal_row_selected(row: Mapping[str, Any], args: argparse.Namespace) -> bool:
+    text_type = str(row.get("type") or row.get("text_type") or "UNKNOWN").casefold()
+    jurisdiction = str(row.get("jurisdiction") or "UNKNOWN")
+    type_selected = args.legal_types is None or text_type in args.legal_types
+    jurisdiction_selected = args.legal_jurisdictions is None or jurisdiction in args.legal_jurisdictions
+    return type_selected and jurisdiction_selected
+
+
+def replay_row_selected(source_file: str, source_row: int, ratio: float, seed: int) -> bool:
+    """Select replay rows reproducibly without retaining an in-memory sample."""
+
+    if ratio >= 1.0:
+        return True
+    payload = f"{seed}\0slimpajama\0{source_file}\0{source_row}".encode("utf-8")
+    value = int.from_bytes(hashlib.sha256(payload).digest()[:8], "big")
+    return value < int(ratio * (1 << 64))
 
 
 def iter_jsonl(path: Path) -> Iterator[tuple[int, dict[str, Any] | None, str | None]]:
@@ -300,10 +376,16 @@ def preflight(args: argparse.Namespace) -> tuple[list[Path], list[Path]]:
         preprocessed_dir = args.output_dir / ".work/preprocessed"
         if not list(preprocessed_dir.glob("accepted-*.jsonl")):
             raise SystemExit(f"No reusable preprocessed shards found in {preprocessed_dir}")
-        if list(args.output_dir.glob("cpt-v1-eu-1b-*.jsonl")):
+        if list(args.output_dir.glob(f"{args.output_prefix}-*.jsonl")):
             raise SystemExit("Final JSONL shards already exist; refusing resume to avoid overwriting them")
     if args.replay_target_tokens <= 0 or args.shard_target_tokens <= 0:
         raise SystemExit("Token targets must be positive")
+    if args.slimpajama_ratio is not None and not 0.0 <= args.slimpajama_ratio <= 1.0:
+        raise SystemExit("--slimpajama-ratio must be between 0 and 1 inclusive")
+    if not args.dataset_name.strip():
+        raise SystemExit("--dataset-name must not be empty")
+    if not args.output_prefix.strip() or "/" in args.output_prefix:
+        raise SystemExit("--output-prefix must be a non-empty filename prefix")
     if args.shuffle_buckets < 1 or args.progress_every < 1:
         raise SystemExit("Shuffle buckets and progress interval must be positive")
     if args.max_legal_input_rows is not None and args.max_legal_input_rows < 1:
@@ -502,6 +584,7 @@ def external_shuffle_and_write(
     seed: int,
     bucket_count: int,
     shard_target_tokens: int,
+    output_prefix: str,
 ) -> FinalShardWriter:
     bucket_dir = work_dir / "shuffle_buckets"
     bucket_dir.mkdir(parents=True, exist_ok=True)
@@ -518,7 +601,7 @@ def external_shuffle_and_write(
             payload["__shuffle_priority__"] = priority
             handles[bucket].write(json.dumps(payload, ensure_ascii=False) + "\n")
 
-    writer = FinalShardWriter(output_dir, shard_target_tokens)
+    writer = FinalShardWriter(output_dir, shard_target_tokens, output_prefix)
     bucket_order = sorted(
         range(bucket_count),
         key=lambda index: hashlib.sha256(f"{seed}\0bucket\0{index}".encode("utf-8")).digest(),
@@ -584,6 +667,7 @@ def resume_from_preprocessed(args: argparse.Namespace, legal_files: list[Path], 
         seed=args.shuffle_seed,
         bucket_count=args.shuffle_buckets,
         shard_target_tokens=args.shard_target_tokens,
+        output_prefix=args.output_prefix,
     )
 
     by_corpus = [
@@ -617,7 +701,7 @@ def resume_from_preprocessed(args: argparse.Namespace, legal_files: list[Path], 
         "jsonl_shards": len(final_writer.shards),
     }
     manifest = {
-        "dataset_name": "CPT-V1-EU-1B",
+        "dataset_name": args.dataset_name,
         "created_at_unix": int(time.time()),
         "runtime_seconds_for_resumed_stage": time.time() - start_time,
         "resumed_from_preprocessed": True,
@@ -628,7 +712,11 @@ def resume_from_preprocessed(args: argparse.Namespace, legal_files: list[Path], 
             "preprocessed_files": [str(path.resolve()) for path in accepted_paths],
         },
         "configuration": {
-            "legal_jurisdiction": "EU",
+            "legal_types": sorted(args.legal_types) if args.legal_types is not None else "ALL",
+            "legal_jurisdictions": (
+                sorted(args.legal_jurisdictions) if args.legal_jurisdictions is not None else "ALL"
+            ),
+            "slimpajama_ratio": args.slimpajama_ratio,
             "perplexity_enabled_in_original_stage": False,
             "near_deduplication": args.near_dedup,
             "near_dedup_threshold": args.dedup_threshold if args.near_dedup == "text-dedup" else None,
@@ -639,7 +727,7 @@ def resume_from_preprocessed(args: argparse.Namespace, legal_files: list[Path], 
         "note": "Preprocessing aggregate counters were not checkpointed by the interrupted run; final statistics are complete.",
     }
     statistics = {
-        "dataset_name": "CPT-V1-EU-1B",
+        "dataset_name": args.dataset_name,
         "token_count_kind": "estimated_1.30_times_whitespace_words",
         "totals": totals,
         "by_corpus": by_corpus,
@@ -662,8 +750,8 @@ def resume_from_preprocessed(args: argparse.Namespace, legal_files: list[Path], 
     )
 
 
-def main() -> None:
-    args = parse_args()
+def main(argv: list[str] | None = None) -> None:
+    args = parse_args(argv)
     legal_files, replay_files = preflight(args)
     if args.resume_from_preprocessed:
         resume_from_preprocessed(args, legal_files, replay_files)
@@ -689,7 +777,15 @@ def main() -> None:
 
     legal_stats = make_stats()
     replay_stats = make_stats()
-    print(f"Processing {len(legal_files)} legal files; selecting jurisdiction=EU", flush=True)
+    type_description = ",".join(sorted(args.legal_types)) if args.legal_types is not None else "ALL"
+    jurisdiction_description = (
+        ",".join(sorted(args.legal_jurisdictions)) if args.legal_jurisdictions is not None else "ALL"
+    )
+    print(
+        f"Processing {len(legal_files)} legal files; "
+        f"selecting types={type_description} jurisdictions={jurisdiction_description}",
+        flush=True,
+    )
     stop_legal = False
     for path in legal_files:
         for row_number, row, error in iter_jsonl(path):
@@ -704,7 +800,7 @@ def main() -> None:
                     stage="parsing",
                     reasons=(error,),
                 )
-            elif row is not None and str(row.get("jurisdiction")) == "EU":
+            elif row is not None and legal_row_selected(row, args):
                 legal_stats["selected_rows"] += 1
                 process_candidate(
                     row,
@@ -733,11 +829,18 @@ def main() -> None:
         if stop_legal:
             break
 
-    print(
-        f"Sampling SlimPajama replay across {len(replay_files)} train shards to "
-        f"~{args.replay_target_tokens:,} tokens",
-        flush=True,
-    )
+    if args.slimpajama_ratio is None:
+        print(
+            f"Sampling SlimPajama replay across {len(replay_files)} train shards to "
+            f"~{args.replay_target_tokens:,} tokens",
+            flush=True,
+        )
+    else:
+        print(
+            f"Deterministically sampling {args.slimpajama_ratio:.2%} of SlimPajama rows "
+            f"across {len(replay_files)} train shards",
+            flush=True,
+        )
     for path, row_number, row, error in iter_replay_round_robin(replay_files):
         replay_stats["input_rows"] += 1
         if error:
@@ -750,7 +853,10 @@ def main() -> None:
                 stage="parsing",
                 reasons=(error,),
             )
-        elif row is not None:
+        elif row is not None and (
+            args.slimpajama_ratio is None
+            or replay_row_selected(path.name, row_number, args.slimpajama_ratio, args.shuffle_seed)
+        ):
             replay_stats["selected_rows"] += 1
             process_candidate(
                 row,
@@ -768,17 +874,22 @@ def main() -> None:
         if replay_stats["input_rows"] % args.progress_every == 0:
             exact_db.commit()
             print(
-                f"Replay scanned={replay_stats['input_rows']:,} accepted={replay_stats['accepted_rows']:,} "
+                f"Replay scanned={replay_stats['input_rows']:,} selected={replay_stats['selected_rows']:,} "
+                f"accepted={replay_stats['accepted_rows']:,} "
                 f"tokens~{replay_stats['accepted_estimated_tokens']:,}",
                 flush=True,
             )
-        if replay_stats["accepted_estimated_tokens"] >= args.replay_target_tokens:
+        if (
+            args.slimpajama_ratio is None
+            and replay_stats["accepted_estimated_tokens"] >= args.replay_target_tokens
+        ):
             break
         if args.max_replay_input_rows and replay_stats["input_rows"] >= args.max_replay_input_rows:
             break
 
     if (
-        args.max_replay_input_rows is None
+        args.slimpajama_ratio is None
+        and args.max_replay_input_rows is None
         and replay_stats["accepted_estimated_tokens"] < args.replay_target_tokens
     ):
         raise RuntimeError(
@@ -824,13 +935,14 @@ def main() -> None:
         seed=args.shuffle_seed,
         bucket_count=args.shuffle_buckets,
         shard_target_tokens=args.shard_target_tokens,
+        output_prefix=args.output_prefix,
     )
 
     legal_tokens = legal_stats["accepted_estimated_tokens"]
     replay_tokens = replay_stats["accepted_estimated_tokens"]
     pre_dedup_tokens = legal_tokens + replay_tokens
     manifest = {
-        "dataset_name": "CPT-V1-EU-1B",
+        "dataset_name": args.dataset_name,
         "created_at_unix": int(time.time()),
         "runtime_seconds": time.time() - start_time,
         "token_count_kind": "estimated_1.30_times_whitespace_words",
@@ -840,8 +952,12 @@ def main() -> None:
             "replay_files": [str(path.resolve()) for path in replay_files],
         },
         "configuration": {
-            "legal_jurisdiction": "EU",
+            "legal_types": sorted(args.legal_types) if args.legal_types is not None else "ALL",
+            "legal_jurisdictions": (
+                sorted(args.legal_jurisdictions) if args.legal_jurisdictions is not None else "ALL"
+            ),
             "replay_target_tokens": args.replay_target_tokens,
+            "slimpajama_ratio": args.slimpajama_ratio,
             "output_shard_target_tokens": args.shard_target_tokens,
             "perplexity_enabled": perplexity_filter is not None,
             "perplexity_applied_to_replay": bool(perplexity_filter and args.apply_kenlm_to_replay),
@@ -914,7 +1030,7 @@ def main() -> None:
             }
         )
     statistics = {
-        "dataset_name": "CPT-V1-EU-1B",
+        "dataset_name": args.dataset_name,
         "token_count_kind": "estimated_1.30_times_whitespace_words",
         "totals": {
             "documents": final_writer.total_rows,
