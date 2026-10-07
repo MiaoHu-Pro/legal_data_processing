@@ -315,6 +315,8 @@ def run_text_dedup_minhash(
         raise FileExistsError(f"Refusing to overwrite non-empty output directory: {output_path}")
 
     try:
+        from datasets import Features
+        from datasets import Value
         from text_dedup.config import Config
         from text_dedup.config import LocalInputConfig
         from text_dedup.config import MinHashAlgorithmConfig
@@ -328,12 +330,32 @@ def run_text_dedup_minhash(
             "polars-grouper, regex, scipy, and pydantic-settings)."
         ) from exc
 
+    # Hugging Face otherwise infers Arrow ``string`` (32-bit offsets). During
+    # text-dedup's indexing map, a worker can concatenate more than 2 GiB of
+    # legal text and raise ``ArrowInvalid: offset overflow``. Use 64-bit Arrow
+    # offsets from the initial JSON load so every later map preserves them.
+    input_features = Features(
+        {
+            "id": Value("large_string"),
+            "text": Value("large_string"),
+            "corpus": Value("large_string"),
+            "type": Value("large_string"),
+            "jurisdiction": Value("large_string"),
+            "source": Value("large_string"),
+            "source_file": Value("large_string"),
+            "source_row": Value("int64"),
+            "estimated_tokens": Value("int64"),
+            # Missing optional values are loaded as nulls.
+            "perplexity": Value("float64"),
+        }
+    )
     input_config = LocalInputConfig(
         file_type="json",
         read_arguments={
             "path": "json",
             "data_files": resolved_paths,
             "split": "train",
+            "features": input_features,
         },
     )
     algorithm_config = MinHashAlgorithmConfig(
