@@ -15,8 +15,18 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
+# Slurm may copy this script to /var/spool/slurm before executing it, so
+# BASH_SOURCE then points at the spool copy rather than the repository. Prefer
+# the directory from which `sbatch` was invoked. Outside Slurm, derive the
+# repository from the script's real location.
+if [[ -n "${SLURM_SUBMIT_DIR:-}" ]] && \
+   [[ -f "${SLURM_SUBMIT_DIR}/datasets_processing/cpt_data_sample_creation_v1_eu_1b.py" ]]; then
+    PROJECT_ROOT="$(cd -- "${SLURM_SUBMIT_DIR}" && pwd)"
+else
+    SOURCE_SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+    PROJECT_ROOT="$(cd -- "${SOURCE_SCRIPT_DIR}/.." && pwd)"
+fi
+SCRIPT_DIR="${PROJECT_ROOT}/datasets_processing"
 CONDA_ENV_NAME="legal-data-process"
 
 # These locations can be overridden at submission time by exporting the
@@ -150,5 +160,5 @@ ls -lh "${OUTPUT_DIR}"/cpt-v1-eu-1b-*.jsonl
  #
  #  Or resume transferred preprocessing:
  #
- #  sbatch datasets_processing/run_cpt_data_sample_creation_v1_eu_1b.sh \
- #    --resume-from-preprocessed
+#   sbatch datasets_processing/run_cpt_data_sample_creation_v1_eu_1b.sh \
+#     --resume-from-preprocessed
