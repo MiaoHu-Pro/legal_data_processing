@@ -112,7 +112,10 @@ class TextDedupRunConfig:
     seed: int = 42
     num_processes: int = max(1, min(8, os.cpu_count() or 1))
     text_column: str = "text"
-    check_false_positives: bool = True
+    # Exact all-pairs verification within every LSH candidate cluster is
+    # quadratic. Keep it opt-in for large corpora; the upstream text-dedup
+    # configuration also defaults this setting to False.
+    check_false_positives: bool = False
     save_clusters: bool = True
     keep_index_column: bool = True
     keep_cluster_column: bool = True

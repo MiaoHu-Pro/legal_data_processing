@@ -111,3 +111,46 @@ srun python -u "${PYTHON_SCRIPT}" \
 
 echo "Finished: $(date --iso-8601=seconds)"
 
+# Created and syntax-checked both executable Slurm scripts:
+  #
+  #  - datasets_processing/run_cpt_data_sample_creation.sh
+  #  - datasets_processing/run_cpt_data_sample_creation_v2_3b.sh
+  #
+  #  Both use:
+  #
+  #  Partition: amd
+  #  CPUs: 4
+  #  Memory: all allocatable node memory (~256 GB)
+  #  Time: 24 hours
+  #  GPU: none
+  #  Conda environment: legal-data-process
+  #  Perplexity: skipped
+  #
+  #  Run CPT-V2:
+  #
+  #  cd /home/mh1f25/scratch/legal_data_process
+  #
+  #  sbatch datasets_processing/run_cpt_data_sample_creation_v2_3b.sh
+  #
+  #  Run a custom dataset:
+  #
+  #  sbatch datasets_processing/run_cpt_data_sample_creation.sh \
+  #    --types caselaw contracts \
+  #    --jurisdictions EU UK \
+  #    --slimpajama-ratio 0.10 \
+  #    --dataset-name CPT-CUSTOM \
+  #    --output-prefix cpt-custom \
+  #    --output-dir datasets/CPT-CUSTOM
+  #
+  #  Example using all SlimPajama:
+  #
+  #  sbatch datasets_processing/run_cpt_data_sample_creation.sh \
+  #    --types legislation \
+  #    --jurisdictions US EU UK Switzerland \
+  #    --slimpajama-ratio 1 \
+  #    --dataset-name CPT-LEGISLATION-FULL-REPLAY \
+  #    --output-prefix cpt-legislation-full-replay \
+  #    --output-dir datasets/CPT-LEGISLATION-FULL-REPLAY
+  #
+  #  The generic launcher requires explicit arguments to prevent accidentally processing the complete 55B-token
+  #  legal corpus.

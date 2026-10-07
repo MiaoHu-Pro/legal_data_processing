@@ -220,6 +220,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--dedup-threshold", type=float, default=0.50)
     parser.add_argument("--dedup-processes", type=int, default=8)
+    parser.add_argument(
+        "--verify-dedup-candidates",
+        action="store_true",
+        help=(
+            "Run exact all-pairs Jaccard verification inside MinHash candidate clusters; "
+            "quadratic and unsuitable for large production corpora"
+        ),
+    )
     parser.add_argument("--shuffle-seed", type=int, default=42)
     parser.add_argument("--shuffle-buckets", type=int, default=128)
     parser.add_argument("--progress-every", type=int, default=50_000)
@@ -648,7 +656,7 @@ def resume_from_preprocessed(args: argparse.Namespace, legal_files: list[Path], 
                 num_permutations=240,
                 seed=args.shuffle_seed,
                 num_processes=args.dedup_processes,
-                check_false_positives=True,
+                check_false_positives=args.verify_dedup_candidates,
                 save_clusters=True,
                 keep_index_column=False,
                 keep_cluster_column=True,
@@ -720,6 +728,7 @@ def resume_from_preprocessed(args: argparse.Namespace, legal_files: list[Path], 
             "perplexity_enabled_in_original_stage": False,
             "near_deduplication": args.near_dedup,
             "near_dedup_threshold": args.dedup_threshold if args.near_dedup == "text-dedup" else None,
+            "dedup_candidate_verification": args.verify_dedup_candidates,
             "shuffle_seed": args.shuffle_seed,
             "output_shard_target_tokens": args.shard_target_tokens,
         },
@@ -916,7 +925,7 @@ def main(argv: list[str] | None = None) -> None:
                 num_permutations=240,
                 seed=args.shuffle_seed,
                 num_processes=args.dedup_processes,
-                check_false_positives=True,
+                check_false_positives=args.verify_dedup_candidates,
                 save_clusters=True,
                 keep_index_column=False,
                 keep_cluster_column=True,
@@ -965,6 +974,7 @@ def main(argv: list[str] | None = None) -> None:
             "kenlm_model": str(args.kenlm_model.resolve()) if args.kenlm_model else None,
             "near_deduplication": args.near_dedup,
             "near_dedup_threshold": args.dedup_threshold if args.near_dedup == "text-dedup" else None,
+            "dedup_candidate_verification": args.verify_dedup_candidates,
             "shuffle_seed": args.shuffle_seed,
             "normalization": asdict(normalization_config),
             "rule_filter": asdict(rule_config),
