@@ -1,0 +1,18 @@
+{
+  "input_directory": "/local/scratch/mh1f25/legal_data_process/datasets/Multi_Legal_Pile_Commercial",
+  "file_pattern": "multi_legal_pile_en_commercial_*.jsonl",
+  "files_processed": 18,
+  "documents": 17011009,
+  "text_bytes": 294653620757,
+  "text_gb": 294.653620757,
+  "words": 42426641943,
+  "estimated_tokens": 55154634525,
+  "estimated_tokens_per_word": 1.3,
+  "bad_json": 0,
+  "missing_text": 0,
+  "missing_type": 0,
+  "missing_jurisdiction": 0,
+  "missing_source": 17011009,
+  "runtime_seconds": 8309.447617292404,
+  "runtime_hours": 2.3081798936923343
+}

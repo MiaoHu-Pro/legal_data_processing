@@ -1,0 +1,29 @@
+# Runtime environment for CPT data preprocessing and text-dedup.
+# Use Python 3.12 (the vendored text-dedup package requires Python >=3.12).
+
+# Versions below match the environment used to run this repository.
+bitarray==3.11.0
+datasets==5.1.0
+ftfy==6.3.1
+numpy==2.5.3
+polars==2.0.0
+polars-grouper==0.4.0
+psutil==7.2.2
+pyarrow==25.0.1
+pydantic==2.13.5
+pydantic-settings==2.15.0
+rbloom==1.5.4
+regex==2026.9.29
+rich==15.0.0
+scipy==1.18.1
+tqdm==4.70.1
+xxhash==4.0.1
+
+# Install the vendored text-dedup implementation and this project from the
+# checked-out repository. Run pip from the repository root.
+-e ./src/text-dedup
+-e .
+
+# Optional: KenLM is needed only when perplexity filtering is enabled.
+# Keep it uninstalled while running with --skip-perplexity.
+# kenlm

@@ -1,0 +1,21 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+/datasets/
+/.venv/
+/download_en_multi_legal_pile.pid
+/download_en_multi_legal_pile.log
+/datasets_processing/analyse_multi_legal_pile.pid
+/datasets_processing/analyse_multi_legal_pile.log
+/datasets_processing/cpt_v1_eu_1b.pid
+/datasets_processing/cpt_v1_eu_1b.log
+
+*.log
+*.pid

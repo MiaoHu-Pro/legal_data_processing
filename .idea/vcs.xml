@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="VcsDirectoryMappings">
+    <mapping directory="$PROJECT_DIR$" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/datasets/Multi_Legal_Pile_Commercial" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/datasets/SlimPajama-1B" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/datasets/evaluation/MMLU-Pro" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/datasets/evaluation/legalbench" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/datasets/evaluation/legalbench_instruct" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/datasets/evaluation/mmlu" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/src/text-dedup" vcs="Git" />
+  </component>
+</project>
