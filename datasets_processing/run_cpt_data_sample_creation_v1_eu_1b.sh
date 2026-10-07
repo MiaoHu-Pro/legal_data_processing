@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --mail-user=miao.hu@soton.ac.uk
 #SBATCH --mail-type=BEGIN,END,FAIL
-#SBATCH --mem=64G
+#SBATCH --mem=0
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
@@ -10,8 +10,8 @@
 #SBATCH --job-name=cpt-v1-eu-1b
 #SBATCH --output=cpt-v1-eu-1b-%j.out
 
-# This preprocessing job does not use a GPU. The standard AMD compute
-# partition provides sufficient memory for the 64 GB request.
+# This preprocessing job does not use a GPU. On Slurm, --mem=0 requests all
+# allocatable memory on the selected node (about 256 GB on the AMD nodes).
 
 set -euo pipefail
 
