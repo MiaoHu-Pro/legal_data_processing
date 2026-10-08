@@ -4,7 +4,6 @@
     <mapping directory="$PROJECT_DIR$" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/datasets/Multi_Legal_Pile_Commercial" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/datasets/SlimPajama-1B" vcs="Git" />
-    <mapping directory="$PROJECT_DIR$/datasets/evaluation/MMLU-Pro" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/datasets/evaluation/legalbench" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/datasets/evaluation/legalbench_instruct" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/datasets/evaluation/mmlu" vcs="Git" />

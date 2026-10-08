@@ -4,7 +4,9 @@ version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.9"
-dependencies = []
+dependencies = [
+    "pyarrow>=21.0.0",
+]
 
 [project.scripts]
 legal-data-process = "legal_data_process:main"
