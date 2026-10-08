@@ -350,6 +350,63 @@ def select_final(
     return writer, selected
 
 
+def inspect_existing_buckets(
+    bucket_paths: list[Path],
+) -> tuple[Counter[tuple[str, str, str]], int]:
+    """Reconstruct availability and row count from completed survivor buckets."""
+
+    available: Counter[tuple[str, str, str]] = Counter()
+    rows = 0
+    for path in bucket_paths:
+        with path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                if not line.strip():
+                    continue
+                row = json.loads(line)
+                available[final_group(row)] += int(
+                    row.get("estimated_tokens") or estimate_tokens(row.get("text", ""))
+                )
+                rows += 1
+    return available, rows
+
+
+def constrained_legal_quotas(
+    original: Mapping[tuple[str, str, str], int],
+    available: Mapping[tuple[str, str, str], int],
+) -> tuple[dict[tuple[str, str, str], int], dict[tuple[str, str, str], int]]:
+    """Cap deficient legal strata and redistribute only among legal surplus.
+
+    The overall legal target is unchanged. Redistribution is proportional to
+    the source stratum weights, subject to each post-dedup availability cap.
+    Replay is intentionally excluded so the legal/replay ratio remains exact.
+    """
+
+    legal_keys = [key for key in original if key[0] == "multilegalpile_commercial"]
+    adjusted = {key: min(original[key], available.get(key, 0)) for key in legal_keys}
+    capped = {key: original[key] - adjusted[key] for key in legal_keys if adjusted[key] < original[key]}
+    remaining = sum(original[key] for key in legal_keys) - sum(adjusted.values())
+
+    while remaining:
+        eligible = [key for key in legal_keys if available.get(key, 0) > adjusted[key]]
+        if not eligible:
+            raise RuntimeError(
+                f"The complete post-dedup legal pool is {remaining:,} tokens below the legal target"
+            )
+        weights = {(key[1], key[2]): LEGAL_STRATUM_TOKENS[(key[1], key[2])] for key in eligible}
+        proposed_by_stratum = allocate_integer(remaining, weights)
+        progress = 0
+        for key in eligible:
+            proposal = proposed_by_stratum[(key[1], key[2])]
+            addition = min(proposal, available[key] - adjusted[key])
+            adjusted[key] += addition
+            progress += addition
+        if progress == 0:
+            raise RuntimeError("Unable to redistribute the legal quota despite reported surplus")
+        remaining -= progress
+
+    return adjusted, capped
+
+
 def main() -> None:
     args = parse_args()
     legal_files = sorted(args.legal_dir.glob("multi_legal_pile_en_commercial_*.jsonl"))
@@ -410,46 +467,80 @@ def main() -> None:
             args, legal_files, replay_files, work_dir, legal_quotas, replay_target
         )
 
-    if args.near_dedup == "text-dedup":
-        dedup_dir = work_dir / "text_dedup_output"
-        print("Running MinHash near deduplication", flush=True)
-        run_text_dedup_minhash(
-            accepted_paths,
-            dedup_dir,
-            TextDedupRunConfig(
-                similarity_threshold=args.dedup_threshold,
-                ngram_size=5,
-                num_permutations=240,
-                seed=args.shuffle_seed,
-                num_processes=args.dedup_processes,
-                check_false_positives=False,
-                save_clusters=True,
-                keep_index_column=False,
-                keep_cluster_column=True,
-            ),
-        )
-        survivors: Iterable[Mapping[str, Any]] = iter_deduplicated_dataset(dedup_dir)
-    else:
-        print("WARNING: near deduplication skipped", flush=True)
-        survivors = iter_staged_jsonl(accepted_paths)
+    dedup_dir = work_dir / "text_dedup_output"
+    bucket_dir = work_dir / "post_dedup_buckets"
+    existing_bucket_paths = sorted(bucket_dir.glob("bucket-*.jsonl")) if bucket_dir.is_dir() else []
+    reuse_buckets = False
+    if args.resume_from_preprocessed and len(existing_bucket_paths) == args.shuffle_buckets:
+        if args.near_dedup == "text-dedup" and (dedup_dir / "state.json").is_file():
+            from datasets import load_from_disk
 
-    print("Bucketing post-dedup survivors for stratified final selection", flush=True)
-    bucket_paths, available = bucket_survivors(survivors, work_dir, args.shuffle_buckets, args.shuffle_seed)
-    deficits_before_selection = {
-        str(key): quota - available.get(key, 0)
-        for key, quota in quotas.items()
-        if available.get(key, 0) < quota
-    }
-    if deficits_before_selection:
+            expected_rows = len(load_from_disk(str(dedup_dir)))
+            print("Validating existing post-dedup buckets for reuse", flush=True)
+            available, bucket_rows = inspect_existing_buckets(existing_bucket_paths)
+            if bucket_rows == expected_rows:
+                reuse_buckets = True
+                bucket_paths = existing_bucket_paths
+                print(f"Reusing {bucket_rows:,} safely validated post-dedup rows", flush=True)
+            else:
+                raise RuntimeError(
+                    f"Existing buckets are incomplete: {bucket_rows:,} rows versus {expected_rows:,} dedup rows"
+                )
+
+    if not reuse_buckets:
+        if bucket_dir.exists():
+            raise RuntimeError(
+                f"Cannot safely overwrite unvalidated bucket directory: {bucket_dir}"
+            )
+        if args.near_dedup == "text-dedup":
+            if args.resume_from_preprocessed and (dedup_dir / "state.json").is_file():
+                print("Reusing completed MinHash output", flush=True)
+            else:
+                print("Running MinHash near deduplication", flush=True)
+                run_text_dedup_minhash(
+                    accepted_paths,
+                    dedup_dir,
+                    TextDedupRunConfig(
+                        similarity_threshold=args.dedup_threshold,
+                        ngram_size=5,
+                        num_permutations=240,
+                        seed=args.shuffle_seed,
+                        num_processes=args.dedup_processes,
+                        check_false_positives=False,
+                        save_clusters=True,
+                        keep_index_column=False,
+                        keep_cluster_column=True,
+                    ),
+                )
+            survivors: Iterable[Mapping[str, Any]] = iter_deduplicated_dataset(dedup_dir)
+        else:
+            print("WARNING: near deduplication skipped", flush=True)
+            survivors = iter_staged_jsonl(accepted_paths)
+
+        print("Bucketing post-dedup survivors for stratified final selection", flush=True)
+        bucket_paths, available = bucket_survivors(
+            survivors, work_dir, args.shuffle_buckets, args.shuffle_seed
+        )
+
+    if available.get(REPLAY_KEY, 0) < replay_target:
         raise RuntimeError(
-            "Post-dedup candidate pool is below one or more quotas; rerun from scratch with a larger "
-            f"--candidate-oversample-factor. Deficits: {deficits_before_selection}"
+            f"Post-dedup replay pool is {replay_target - available.get(REPLAY_KEY, 0):,} tokens below "
+            "the fixed replay quota; rerun from scratch with a larger oversample factor"
+        )
+    adjusted_legal, capped_legal = constrained_legal_quotas(quotas, available)
+    adjusted_quotas = dict(adjusted_legal)
+    adjusted_quotas[REPLAY_KEY] = replay_target
+    if capped_legal:
+        print(
+            "Redistributing deficient legal strata while preserving the total 90:10 mixture: "
+            + ", ".join(f"{key} deficit={value:,}" for key, value in sorted(capped_legal.items())),
+            flush=True,
         )
 
     writer, selected = select_final(
-        bucket_paths, quotas, args.output_dir, args.output_prefix, args.shard_target_tokens
+        bucket_paths, adjusted_quotas, args.output_dir, args.output_prefix, args.shard_target_tokens
     )
-    deficits = {key: quotas[key] - selected.get(key, 0) for key in quotas}
+    deficits = {key: adjusted_quotas[key] - selected.get(key, 0) for key in adjusted_quotas}
     total_deficit = args.total_target_tokens - writer.total_tokens
     if total_deficit > args.total_target_tokens * args.quota_tolerance:
         raise RuntimeError(
@@ -457,13 +548,15 @@ def main() -> None:
         )
 
     quota_rows = []
-    for key in sorted(quotas):
+    for key in sorted(adjusted_quotas):
         quota_rows.append(
             {
                 "corpus": key[0],
                 "type": key[1],
                 "jurisdiction": key[2],
-                "target_estimated_tokens": quotas[key],
+                "proportional_target_estimated_tokens": quotas[key],
+                "adjusted_target_estimated_tokens": adjusted_quotas[key],
+                "redistributed_tokens": adjusted_quotas[key] - quotas[key],
                 "available_post_dedup_tokens": available[key],
                 "selected_estimated_tokens": selected[key],
                 "deficit_tokens": deficits[key],
