@@ -8,8 +8,9 @@ type-by-jurisdiction distribution. The default corpus mixture is 90% legal and
 10% SlimPajama replay.
 
 Counts are estimates (1.3 times whitespace-delimited words), so an exact target
-is generally impossible without truncating a document. Selection stays within
-each quota and reports the small indivisible-document remainder.
+is generally impossible without truncating a document. Selection includes the
+document that crosses each quota and enforces a configurable corpus-level
+overshoot allowance (1% by default).
 """
 
 from __future__ import annotations
@@ -98,7 +99,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--shuffle-seed", type=int, default=42)
     parser.add_argument("--shuffle-buckets", type=int, default=128)
     parser.add_argument("--progress-every", type=int, default=50_000)
-    parser.add_argument("--quota-tolerance", type=float, default=0.001)
+    parser.add_argument(
+        "--corpus-overshoot-tolerance",
+        "--quota-tolerance",
+        dest="corpus_overshoot_tolerance",
+        type=float,
+        default=0.01,
+        help="Maximum legal and replay overshoot fraction (default: 0.01)",
+    )
     parser.add_argument("--keep-work-dir", action="store_true")
     parser.add_argument("--resume-from-preprocessed", action="store_true")
     args = parser.parse_args()
@@ -109,8 +117,8 @@ def parse_args() -> argparse.Namespace:
         parser.error("--legal-share must be between 0 and 1")
     if args.candidate_oversample_factor <= 1.0:
         parser.error("--candidate-oversample-factor must be greater than 1")
-    if not 0.0 <= args.quota_tolerance < 1.0:
-        parser.error("--quota-tolerance must be in [0, 1)")
+    if not 0.0 <= args.corpus_overshoot_tolerance < 1.0:
+        parser.error("--corpus-overshoot-tolerance must be in [0, 1)")
     if min(args.shard_target_tokens, args.dedup_processes, args.shuffle_buckets, args.progress_every) < 1:
         parser.error("shard target, process count, bucket count, and progress interval must be positive")
 
@@ -337,7 +345,7 @@ def select_final(
             if quota is None:
                 continue
             tokens = int(row.get("estimated_tokens") or estimate_tokens(row.get("text", "")))
-            if selected[group] + tokens > quota:
+            if selected[group] >= quota:
                 continue
             row.pop("__selection_priority__", None)
             row.pop("__INDEX__", None)
@@ -540,12 +548,24 @@ def main() -> None:
     writer, selected = select_final(
         bucket_paths, adjusted_quotas, args.output_dir, args.output_prefix, args.shard_target_tokens
     )
-    deficits = {key: adjusted_quotas[key] - selected.get(key, 0) for key in adjusted_quotas}
-    total_deficit = args.total_target_tokens - writer.total_tokens
-    if total_deficit > args.total_target_tokens * args.quota_tolerance:
+    differences = {key: selected.get(key, 0) - adjusted_quotas[key] for key in adjusted_quotas}
+    selected_legal = sum(
+        tokens for key, tokens in selected.items() if key[0] == "multilegalpile_commercial"
+    )
+    selected_replay = selected.get(REPLAY_KEY, 0)
+    legal_maximum = math.floor(legal_target * (1.0 + args.corpus_overshoot_tolerance))
+    replay_maximum = math.floor(replay_target * (1.0 + args.corpus_overshoot_tolerance))
+    if not legal_target <= selected_legal <= legal_maximum:
         raise RuntimeError(
-            f"Final indivisible-document deficit {total_deficit:,} exceeds tolerance; deficits={deficits}"
+            f"Final legal tokens {selected_legal:,} are outside [{legal_target:,}, {legal_maximum:,}]"
         )
+    if not replay_target <= selected_replay <= replay_maximum:
+        raise RuntimeError(
+            f"Final replay tokens {selected_replay:,} are outside [{replay_target:,}, {replay_maximum:,}]"
+        )
+    total_difference = writer.total_tokens - args.total_target_tokens
+    if total_difference < 0:
+        raise RuntimeError(f"Final total is unexpectedly {abs(total_difference):,} tokens below target")
 
     quota_rows = []
     for key in sorted(adjusted_quotas):
@@ -559,7 +579,7 @@ def main() -> None:
                 "redistributed_tokens": adjusted_quotas[key] - quotas[key],
                 "available_post_dedup_tokens": available[key],
                 "selected_estimated_tokens": selected[key],
-                "deficit_tokens": deficits[key],
+                "difference_from_adjusted_target_tokens": differences[key],
             }
         )
     manifest = {
@@ -577,13 +597,20 @@ def main() -> None:
             "dedup_candidate_verification": False,
             "shuffle_seed": args.shuffle_seed,
             "output_shard_target_tokens": args.shard_target_tokens,
+            "corpus_overshoot_tolerance": args.corpus_overshoot_tolerance,
         },
         "preprocessing": checkpoint,
         "quotas": quota_rows,
         "final": {
             "documents": writer.total_rows,
             "estimated_tokens": writer.total_tokens,
-            "target_deficit_tokens": total_deficit,
+            "target_difference_tokens": total_difference,
+            "legal_estimated_tokens": selected_legal,
+            "legal_minimum_tokens": legal_target,
+            "legal_maximum_tokens": legal_maximum,
+            "replay_estimated_tokens": selected_replay,
+            "replay_minimum_tokens": replay_target,
+            "replay_maximum_tokens": replay_maximum,
             "jsonl_bytes": writer.total_bytes,
             "jsonl_shards": len(writer.shards),
             "shards": writer.shards,
@@ -606,7 +633,7 @@ def main() -> None:
         shutil.rmtree(work_dir)
     print(
         f"Complete: {writer.total_rows:,} documents, ~{writer.total_tokens:,}/{args.total_target_tokens:,} "
-        f"estimated tokens, deficit={total_deficit:,}",
+        f"estimated tokens, overshoot={total_difference:,}",
         flush=True,
     )
     print(f"Output: {args.output_dir}", flush=True)
