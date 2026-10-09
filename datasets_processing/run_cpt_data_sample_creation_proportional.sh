@@ -134,46 +134,46 @@ python -u "${PYTHON_SCRIPT}" \
 echo "Finished: $(date --iso-8601=seconds)"
 
 # Created the new standalone Slurm launcher:
-  #
-  #  datasets_processing/run_cpt_data_sample_creation_proportional.sh
-  #
-  #  The existing run_cpt_data_sample_creation.sh remains unchanged.
-  #
-  #  Submit a 5B dataset:
-  #
-  #  cd /home/mh1f25/scratch/legal_data_process
-  #
-  #  sbatch datasets_processing/run_cpt_data_sample_creation_proportional.sh \
-  #    --total-target-tokens 5000000000
-  #
-  #  This uses:
-  #
-  #  - 4.5B post-dedup legal tokens
-  #  - 0.5B post-dedup SlimPajama tokens
-  #  - 1.5× candidate oversampling
-  #  - Four CPU workers
-  #  - Entire AMD node memory
-  #  - 200M-token output shards
-  #  - No GPU
-  #  - Perplexity filtering skipped
-  #
-  #  To specify the output:
-  #
-  #  sbatch datasets_processing/run_cpt_data_sample_creation_proportional.sh \
-  #    --total-target-tokens 5000000000 \
-  #    --dataset-name CPT-Proportional-5B \
-  #    --output-prefix cpt-proportional-5b \
-  #    --output-dir datasets/CPT-Proportional-5B
-  #
-  #  Safe resume after completed preprocessing:
-  #
-  #  sbatch datasets_processing/run_cpt_data_sample_creation_proportional.sh \
-  #    --total-target-tokens 5000000000 \
-  #    --resume-from-preprocessed
-  #
-  #  The log filename will be:
-  #
-  #  cpt-proportional-<job-id>.out
+#
+#  datasets_processing/run_cpt_data_sample_creation_proportional.sh
+#
+#  The existing run_cpt_data_sample_creation.sh remains unchanged.
+#
+#  Submit a 5B dataset:
+#
+#  cd /home/mh1f25/scratch/legal_data_process
+#
+#  sbatch datasets_processing/run_cpt_data_sample_creation_proportional.sh \
+#    --total-target-tokens 5000000000
+#
+#  This uses:
+#
+#  - 4.5B post-dedup legal tokens
+#  - 0.5B post-dedup SlimPajama tokens
+#  - 1.5× candidate oversampling
+#  - Four CPU workers
+#  - Entire AMD node memory
+#  - 200M-token output shards
+#  - No GPU
+#  - Perplexity filtering skipped
+#
+#  To specify the output:
+#
+#  sbatch datasets_processing/run_cpt_data_sample_creation_proportional.sh \
+#    --total-target-tokens 5000000000 \
+#    --dataset-name CPT-Proportional-5B \
+#    --output-prefix cpt-proportional-5b \
+#    --output-dir datasets/CPT-Proportional-5B
+#
+#  Safe resume after completed preprocessing:
+#
+#  sbatch datasets_processing/run_cpt_data_sample_creation_proportional.sh \
+#    --total-target-tokens 5000000000 \
+#    --resume-from-preprocessed
+#
+#  The log filename will be:
+#
+#  cpt-proportional-<job-id>.out
 
 #sbatch datasets_processing/run_cpt_data_sample_creation_proportional.sh \
 #      --total-target-tokens 8000000000 \
@@ -181,3 +181,81 @@ echo "Finished: $(date --iso-8601=seconds)"
 #      --dataset-name CPT-Proportional-8B-76L-4R \
 #      --output-prefix cpt-proportional-8b-76l-4r \
 #      --output-dir datasets/CPT-Proportional-8B-76L-4R
+
+#Use Slurm accounting for a quick live view:
+#
+#   squeue -j 1786571 \
+#       -o "%.18i %.10P %.10T %.12M %.6D %.8C %R"
+#
+#  Check CPU time and memory:
+#
+#  sstat -j 1786571 --allsteps \
+#      --format=JobID,NTasks,AveCPU,AveRSS,MaxRSS,MaxVMSize
+#
+#  The Python process is probably job step .0, so this more specific command may be clearer:
+#
+#  sstat -j 1786571.0 \
+#      --format=JobID,NTasks,AveCPU,AveRSS,MaxRSS,MaxVMSize
+#
+#  Attach a monitoring shell to the allocated node:
+#
+#   srun \
+#       --jobid=1786571 \
+#       --overlap \
+#       --nodes=1 \
+#       --ntasks=1 \
+#       --cpus-per-task=1 \
+#       --cpu-bind=none \
+#       --pty bash
+#
+# watch -n 2 free -h
+
+#  Inside that shell, monitor memory:
+#
+#  watch -n 2 free -h
+#
+#  Monitor the largest processes:
+#
+#  watch -n 2 \
+#      'ps -eo pid,ppid,stat,pcpu,pmem,rss,vsz,etime,cmd --sort=-rss | head -25'
+#
+#  Or use:
+#
+#  htop
+#
+#  In htop:
+#
+#  - Press 1 to display individual CPU cores.
+#  - RES is actual resident RAM.
+#  - %CPU may approach 400% across four allocated CPU cores.
+#  - Press F6 and select PERCENT_MEM to sort by memory.
+#  - Press q to exit.
+#
+#  For one combined snapshot:
+#
+#  free -h
+#
+#  ps -eo pid,ppid,stat,pcpu,pmem,rss,vsz,etime,cmd \
+#      --sort=-rss \
+#      | head -25
+#
+#  Exit the monitoring shell with:
+#
+#  exit
+#
+#  This will not stop job 1786571.
+#
+#  Continue monitoring pipeline progress from the login node:
+#
+#  tail -f cpt-proportional-1786571.out
+#
+#  After the job finishes, obtain final efficiency statistics:
+#
+#  seff 1786571
+#
+#  or:
+#
+#  sacct -j 1786571 \
+#      --format=JobID,State,Elapsed,AllocCPUS,TotalCPU,MaxRSS,ExitCode
+#
+
