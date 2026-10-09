@@ -118,13 +118,17 @@ df -h "${PROJECT_ROOT}" "${JOB_TEMP_BASE}" || true
 
 # KenLM perplexity filtering remains intentionally deferred. Other arguments,
 # including the total target and optional output naming, pass through verbatim.
-srun python -u "${PYTHON_SCRIPT}" \
-    --legal-share 0.9 \
-    --candidate-oversample-factor 1.5 \
-    --skip-perplexity \
-    --dedup-processes "${SLURM_CPUS_PER_TASK:-4}" \
-    --shard-target-tokens 200000000 \
-    "$@"
+srun \
+--ntasks=1 \
+--cpus-per-task="${SLURM_CPUS_PER_TASK:-4}" \
+--cpu-bind=none \
+python -u "${PYTHON_SCRIPT}" \
+--legal-share 0.9 \
+--candidate-oversample-factor 1.5 \
+--skip-perplexity \
+--dedup-processes "${SLURM_CPUS_PER_TASK:-4}" \
+--shard-target-tokens 200000000 \
+"$@"
 
 echo "Finished: $(date --iso-8601=seconds)"
 
@@ -169,3 +173,9 @@ echo "Finished: $(date --iso-8601=seconds)"
   #  The log filename will be:
   #
   #  cpt-proportional-<job-id>.out
+
+#    sbatch datasets_processing/run_cpt_data_sample_creation_proportional.sh \
+#      --total-target-tokens 10000000000 \
+#      --dataset-name CPT-Proportional-10B \
+#      --output-prefix cpt-proportional-10b \
+#      --output-dir datasets/CPT-Proportional-10B
