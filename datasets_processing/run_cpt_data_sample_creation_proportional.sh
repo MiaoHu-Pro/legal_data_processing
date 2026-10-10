@@ -54,11 +54,19 @@ export PYTHONNOUSERSITE=1
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-4}"
 export POLARS_MAX_THREADS="${SLURM_CPUS_PER_TASK:-4}"
 
-JOB_TEMP_BASE="${SLURM_TMPDIR:-/tmp}"
+# MinHash creates large Hugging Face/Arrow intermediates.  The compute-node
+# root filesystem is only about 126 GB on Iridis, so /tmp is too small for a
+# multi-billion-token candidate pool.  Keep job-specific temporary data on the
+# large shared scratch filesystem.  CPT_SCRATCH_CACHE_ROOT remains overridable
+# for clusters with a different high-capacity filesystem.
+JOB_TEMP_BASE="${CPT_SCRATCH_CACHE_ROOT:-${PROJECT_ROOT}/datasets/.cpt_job_cache}"
 JOB_TEMP_DIR="${JOB_TEMP_BASE}/cpt-proportional-${SLURM_JOB_ID:-manual}"
 export HF_HOME="${JOB_TEMP_DIR}/huggingface"
 export HF_DATASETS_CACHE="${HF_HOME}/datasets"
-mkdir -p "${HF_DATASETS_CACHE}"
+export TMPDIR="${JOB_TEMP_DIR}/tmp"
+export TMP="${TMPDIR}"
+export TEMP="${TMPDIR}"
+mkdir -p "${HF_DATASETS_CACHE}" "${TMPDIR}"
 
 cd "${PROJECT_ROOT}"
 
@@ -68,6 +76,7 @@ echo "Started: $(date --iso-8601=seconds)"
 echo "Project root: ${PROJECT_ROOT}"
 echo "Conda environment: ${CONDA_DEFAULT_ENV:-not-active}"
 echo "Hugging Face cache: ${HF_DATASETS_CACHE}"
+echo "Temporary directory: ${TMPDIR}"
 echo "Proportional CPT arguments: $*"
 
 if [[ "${CONDA_DEFAULT_ENV:-}" != "${CONDA_ENV_NAME}" ]]; then
@@ -115,7 +124,7 @@ echo "Allocated resources:"
 echo "  CPUs: ${SLURM_CPUS_PER_TASK:-4}"
 echo "  Memory requested: all allocatable node memory"
 free -h || true
-df -h "${PROJECT_ROOT}" "${JOB_TEMP_BASE}" || true
+df -h "${PROJECT_ROOT}" "${JOB_TEMP_DIR}" || true
 
 # KenLM perplexity filtering remains intentionally deferred. Other arguments,
 # including the total target and optional output naming, pass through verbatim.
@@ -130,6 +139,17 @@ python -u "${PYTHON_SCRIPT}" \
 --dedup-processes "${SLURM_CPUS_PER_TASK:-4}" \
 --shard-target-tokens 200000000 \
 "$@"
+
+case "${JOB_TEMP_DIR}" in
+    "${JOB_TEMP_BASE}"/cpt-proportional-*)
+        echo "Removing completed job cache: ${JOB_TEMP_DIR}"
+        rm -rf -- "${JOB_TEMP_DIR}"
+        ;;
+    *)
+        echo "Refusing to remove unexpected job-cache path: ${JOB_TEMP_DIR}" >&2
+        exit 1
+        ;;
+esac
 
 echo "Finished: $(date --iso-8601=seconds)"
 
@@ -182,6 +202,28 @@ echo "Finished: $(date --iso-8601=seconds)"
 #      --output-prefix cpt-proportional-8b-76l-4r \
 #      --output-dir datasets/CPT-Proportional-8B-76L-4R
 
+#resume for 8B
+#sbatch datasets_processing/run_cpt_data_sample_creation_proportional.sh \
+#      --total-target-tokens 8000000000 \
+#      --legal-share 0.95 \
+#      --dataset-name CPT-Proportional-8B-76L-4R \
+#      --output-prefix cpt-proportional-8b-76l-4r \
+#      --output-dir datasets/CPT-Proportional-8B-76L-4R \
+#      --resume-from-preprocessed
+
+
+#resume for 10B
+#  sbatch datasets_processing/run_cpt_data_sample_creation_proportional.sh \
+#      --total-target-tokens 10000000000 \
+#      --legal-share 0.95 \
+#      --candidate-oversample-factor 1.5 \
+#      --dataset-name CPT-Proportional-10B-95L-5R \
+#      --output-prefix cpt-proportional-10b-95l-5r \
+#      --output-dir datasets/CPT-Proportional-10B-95L-5R \
+#      --resume-from-preprocessed
+
+
+
 #Use Slurm accounting for a quick live view:
 #
 #   squeue -j 1786571 \
@@ -218,7 +260,7 @@ echo "Finished: $(date --iso-8601=seconds)"
 #
 #  watch -n 2 \
 #      'ps -eo pid,ppid,stat,pcpu,pmem,rss,vsz,etime,cmd --sort=-rss | head -25'
-#
+
 #  Or use:
 #
 #  htop
@@ -257,5 +299,3 @@ echo "Finished: $(date --iso-8601=seconds)"
 #
 #  sacct -j 1786571 \
 #      --format=JobID,State,Elapsed,AllocCPUS,TotalCPU,MaxRSS,ExitCode
-#
-

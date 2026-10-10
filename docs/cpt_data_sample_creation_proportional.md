@@ -658,6 +658,37 @@ The script automatically redistributes a stratum-level deficit across other lega
 
 A non-empty output directory is never overwritten on a fresh run. Choose a new directory or inspect and deliberately clean the failed run. Do not point recursive deletion commands at the dataset root.
 
+### No space left during MinHash
+
+Large MinHash runs create Hugging Face Arrow cache files that can be much
+larger than the final JSONL dataset. The Slurm launcher places these files in a
+job-specific directory on shared scratch:
+
+```text
+datasets/.cpt_job_cache/cpt-proportional-<job-id>/
+```
+
+It also sets `TMPDIR`, `TMP`, and `TEMP` to that location so temporary Arrow
+files do not fill the compute node's small `/tmp` filesystem. On another
+cluster, override the cache root at submission time:
+
+```bash
+CPT_SCRATCH_CACHE_ROOT=/path/to/large/scratch \
+sbatch datasets_processing/run_cpt_data_sample_creation_proportional.sh ...
+```
+
+The launcher removes only its exact job-specific cache directory after a
+successful run. It deliberately leaves that cache in place after a failure so
+the failure can be inspected; remove the exact failed-job cache after checking
+that no process is using it.
+
+After a failed MinHash stage, retain `.work/preprocessed` and
+`.work/preprocessing_complete.json` for resume. If
+`.work/text_dedup_output` exists without `state.json`, it is incomplete and
+must be quarantined or removed before using `--resume-from-preprocessed`.
+Never remove the whole dataset or `.work/preprocessed` directory when
+recovering this stage.
+
 ### Failure after final shards begin writing
 
 Final selection writes JSONL before final validation and manifests. A validation failure can therefore leave final shards without `manifest.json`. Such output is incomplete and must not be used for training.
