@@ -668,9 +668,13 @@ job-specific directory on shared scratch:
 datasets/.cpt_job_cache/cpt-proportional-<job-id>/
 ```
 
-It also sets `TMPDIR`, `TMP`, and `TEMP` to that location so temporary Arrow
-files do not fill the compute node's small `/tmp` filesystem. On another
-cluster, override the cache root at submission time:
+The large Arrow cache remains in that shared location. `TMPDIR`, `TMP`, and
+`TEMP` instead use the short local path `/tmp/cptp-<job-id>`. Python's
+multiprocessing manager creates Unix-domain sockets below `TMPDIR`, and Linux's
+roughly 108-byte socket-path limit makes the full shared-project path unsafe.
+Only sockets and small generic temporary files use the short local path.
+
+On another cluster, override the large cache root at submission time:
 
 ```bash
 CPT_SCRATCH_CACHE_ROOT=/path/to/large/scratch \

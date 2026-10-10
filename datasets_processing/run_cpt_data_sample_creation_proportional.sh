@@ -63,7 +63,13 @@ JOB_TEMP_BASE="${CPT_SCRATCH_CACHE_ROOT:-${PROJECT_ROOT}/datasets/.cpt_job_cache
 JOB_TEMP_DIR="${JOB_TEMP_BASE}/cpt-proportional-${SLURM_JOB_ID:-manual}"
 export HF_HOME="${JOB_TEMP_DIR}/huggingface"
 export HF_DATASETS_CACHE="${HF_HOME}/datasets"
-export TMPDIR="${JOB_TEMP_DIR}/tmp"
+# Python's multiprocessing Manager creates an AF_UNIX socket below TMPDIR.
+# Linux limits that socket path to roughly 108 bytes, so the long shared
+# project path cannot be used here. Large Arrow files still go to the explicit
+# HF_DATASETS_CACHE above; this short local path is only for sockets and small
+# generic temporary files.
+SOCKET_TEMP_DIR="/tmp/cptp-${SLURM_JOB_ID:-manual}"
+export TMPDIR="${SOCKET_TEMP_DIR}"
 export TMP="${TMPDIR}"
 export TEMP="${TMPDIR}"
 mkdir -p "${HF_DATASETS_CACHE}" "${TMPDIR}"
@@ -147,6 +153,15 @@ case "${JOB_TEMP_DIR}" in
         ;;
     *)
         echo "Refusing to remove unexpected job-cache path: ${JOB_TEMP_DIR}" >&2
+        exit 1
+        ;;
+esac
+case "${SOCKET_TEMP_DIR}" in
+    /tmp/cptp-*)
+        rm -rf -- "${SOCKET_TEMP_DIR}"
+        ;;
+    *)
+        echo "Refusing to remove unexpected socket-temp path: ${SOCKET_TEMP_DIR}" >&2
         exit 1
         ;;
 esac
