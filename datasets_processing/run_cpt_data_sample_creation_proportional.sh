@@ -8,13 +8,15 @@
 #SBATCH --partition=amd
 #SBATCH --time=24:00:00
 #SBATCH --job-name=cpt-proportional
-#SBATCH --output=cpt-proportional-%j.out
+#SBATCH --output=logs/cpt-proportional-%j.out
 
 # Post-dedup proportional CPT creation. --mem=0 requests all allocatable
 # memory on one AMD node (about 256 GB). This job does not use a GPU.
 # SBATCH --partition=amd, or using amd_serial
 
 set -euo pipefail
+
+
 
 if [[ -n "${SLURM_SUBMIT_DIR:-}" ]] && \
    [[ -f "${SLURM_SUBMIT_DIR}/datasets_processing/cpt_data_sample_creation_proportional.py" ]]; then
@@ -75,6 +77,7 @@ export TEMP="${TMPDIR}"
 mkdir -p "${HF_DATASETS_CACHE}" "${TMPDIR}"
 
 cd "${PROJECT_ROOT}"
+mkdir -p "${PROJECT_ROOT}/logs"
 
 echo "Slurm job ID: ${SLURM_JOB_ID:-not-running-under-slurm}"
 echo "Node: $(hostname)"
@@ -226,6 +229,13 @@ echo "Finished: $(date --iso-8601=seconds)"
 #      --output-dir datasets/CPT-Proportional-8B-76L-4R \
 #      --resume-from-preprocessed
 
+#   sbatch datasets_processing/run_cpt_data_sample_creation_proportional.sh \
+  #      --total-target-tokens 10000000000 \
+  #      --legal-share 0.95 \
+  #      --candidate-oversample-factor 1.5 \
+  #      --dataset-name CPT-Proportional-10B-95L-5R \
+  #      --output-prefix cpt-proportional-10b-95l-5r \
+  #      --output-dir datasets/CPT-Proportional-10B-95L-5R
 
 #resume for 10B
 #  sbatch datasets_processing/run_cpt_data_sample_creation_proportional.sh \
