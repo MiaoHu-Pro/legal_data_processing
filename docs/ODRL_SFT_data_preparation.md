@@ -1,5 +1,28 @@
 # ODRL SFT data preparation
 
+## Dedicated message adapter: sft_odrl_data.py
+
+The training project now contains `src/training/sft_odrl_data.py`. The preparation pipeline calls its `build_tokenized_splits` function automatically, so the Slurm workflow remains the same. Sync this new module along with the updated `prepare_odrl_sft.py` and preparation launcher to the server.
+
+For BOTH directions, `messages[0]` must have role `user` and is the input (including its task instruction); `messages[1]` must have role `assistant` and is the gold output. The adapter does **not** reverse messages for odrl2text: the data already puts the ODRL input first. It preserves all text/JSON characters, rejects malformed roles, empty content and embedded chat delimiters, applies the existing Qwen chat template, and labels only assistant content plus its end-of-turn token. User text and role headers receive `-100` labels. Gold answers are present during teacher-forced SFT, but must not be supplied during generation evaluation. Row metadata is not tokenized.
+
+`validate_messages` checks the message schema; `encode_record` creates `input_ids`, `attention_mask`, and `labels`; `build_tokenized_splits` checks group separation and creates Arrow splits and per-direction statistics. It does not validate full ODRL semantics or repair ambiguous source labels. Overlength examples fail rather than silently truncating policy JSON.
+
+Optional standalone conversion of ALREADY prepared joint JSONL (not needed if using the full preparation launcher):
+
+```bash
+cd "${HOME}/scratch/dips_project/lex-legal-post-training"
+python -m src.training.sft_odrl_data \
+    --input-dir "${HOME}/scratch/legal_data_process/datasets/ODRL_SFT-processed-Joint/joint" \
+    --output-dir "${HOME}/scratch/legal_data_process/datasets/ODRL_SFT-processed-Qwen3-Joint/joint" \
+    --tokenizer-path "${HOME}/scratch/llms_model/lexlegal_llms/base/Qwen3-8B-Base" \
+    --max-length 4096
+```
+
+The destination must not exist. The standalone command reads only train and validation JSONL and requires both directions in each split. Directional evaluation files remain in the ORIGINAL prepared root; this command does not copy or tokenize tests. Use the full preparation launcher instead when you want directional evaluation files and tokenized training data together under one root.
+
+Verification: all 4,506 pairs per direction and 8,110 joint train/validation pairs passed schema checks. Three unit tests cover assistant-only labels in both directions, invalid roles, overlength rejection, and split leakage/test exclusion using deterministic tokenizer/dataset test doubles. The existing four preprocessing tests also pass. Real Qwen tokenizer/Arrow integration still needs the server dependencies; the local test environment lacks them.
+
 ## Slurm preparation and joint seven-model training
 
 **Current behavior: seven independent starting models, each trained jointly on text2odrl and odrl2text.** This replaces the earlier 14-run, separate-direction launcher. Do not use the old array indices 7–13.

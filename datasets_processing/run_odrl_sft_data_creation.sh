@@ -18,7 +18,7 @@ ODRL_TOKENIZER_PATH="${ODRL_TOKENIZER_PATH:-${HOME}/scratch/llms_model/lexlegal_
 CONDA_ENV_NAME="${CONDA_ENV_NAME:-lex_legal_rl_post_training_env}"
 
 cd "${DATA_PROCESS_ROOT}"
-for required in datasets_processing/prepare_odrl_sft.py "${TRAINING_PROJECT_ROOT}/src/training/sft_data.py" "${ODRL_TOKENIZER_PATH}/tokenizer_config.json"; do
+for required in datasets_processing/prepare_odrl_sft.py "${TRAINING_PROJECT_ROOT}/src/training/sft_data.py" "${TRAINING_PROJECT_ROOT}/src/training/sft_odrl_data.py" "${ODRL_TOKENIZER_PATH}/tokenizer_config.json"; do
     [[ -f "${required}" ]] || { echo "Missing required file: ${required}" >&2; exit 1; }
 done
 

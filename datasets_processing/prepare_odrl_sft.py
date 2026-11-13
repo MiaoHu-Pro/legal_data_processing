@@ -135,20 +135,12 @@ def write_jsonl(path, rows):
 def tokenize(output, rows, args, splits=SPLITS):
     # Share the existing trainer's exact template, masking and signature contract.
     sys.path.insert(0, str(args.training_project.expanduser().resolve()))
-    from src.training.sft_data import configure_tokenizer, encode_messages, tokenizer_signature
+    from src.training.sft_data import tokenizer_signature
+    from src.training.sft_odrl_data import build_tokenized_splits
     from transformers import AutoTokenizer
-    from datasets import Dataset, DatasetDict
     tokenizer = AutoTokenizer.from_pretrained(str(args.tokenizer_path.expanduser()), local_files_only=True)
-    configure_tokenizer(tokenizer)
-    datasets, stats = {}, {}
-    for split in splits:
-        # Fail instead of silently truncating or changing held-out coverage.
-        encoded = [encode_messages(r['messages'], tokenizer, args.max_length) for r in rows if r['split'] == split]
-        datasets[split] = Dataset.from_list(encoded)
-        stats[split] = {'examples': len(encoded), 'tokens': sum(len(r['input_ids']) for r in encoded),
-                        'assistant_tokens': sum(sum(t != -100 for t in r['labels']) for r in encoded),
-                        'max_tokens': max(len(r['input_ids']) for r in encoded)}
-    DatasetDict(datasets).save_to_disk(str(output / 'dataset'))
+    datasets, stats = build_tokenized_splits(rows, tokenizer, args.max_length, splits=splits)
+    datasets.save_to_disk(str(output / 'dataset'))
     tokenizer.save_pretrained(output / 'tokenizer')
     return {'smoke_subset': False, 'max_length': args.max_length,
             'tokenizer_signature': tokenizer_signature(tokenizer), 'statistics': stats}
