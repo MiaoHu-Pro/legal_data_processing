@@ -6,7 +6,6 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
-#SBATCH --mem=32G
 #SBATCH --time=04:00:00
 #SBATCH --output=odrl-sft-prepare-%j.out
 set -euo pipefail
