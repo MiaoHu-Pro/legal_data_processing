@@ -13,7 +13,7 @@ set -euo pipefail
 # Submit from the legal_data_process root, or set DATA_PROCESS_ROOT explicitly.
 DATA_PROCESS_ROOT="${DATA_PROCESS_ROOT:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}}"
 TRAINING_PROJECT_ROOT="${TRAINING_PROJECT_ROOT:-${HOME}/scratch/dips_project/lex-legal-post-training}"
-ODRL_PREPARED_ROOT="${ODRL_PREPARED_ROOT:-${DATA_PROCESS_ROOT}/datasets/ODRL_SFT-processed-Qwen3}"
+ODRL_PREPARED_ROOT="${ODRL_PREPARED_ROOT:-${DATA_PROCESS_ROOT}/datasets/ODRL_SFT-processed-Qwen3-Joint}"
 ODRL_TOKENIZER_PATH="${ODRL_TOKENIZER_PATH:-${HOME}/scratch/llms_model/lexlegal_llms/base/Qwen3-8B-Base}"
 CONDA_ENV_NAME="${CONDA_ENV_NAME:-lex_legal_rl_post_training_env}"
 

@@ -1,5 +1,6 @@
 """Run with python -m unittest discover -s datasets_processing -p test_prepare_odrl_sft.py."""
 import json
+import os
 from pathlib import Path
 import unittest
 
@@ -31,7 +32,7 @@ class PreparationTests(unittest.TestCase):
         self.assertEqual(expected, {r['policy_group']: r['split'] for r in rows})
 
     def test_generated_artifacts(self):
-        root = ROOT / 'datasets/ODRL_SFT-processed'
+        root = Path(os.environ.get('ODRL_TEST_ROOT', ROOT / 'datasets/ODRL_SFT-processed-Joint'))
         if not root.exists():
             self.skipTest('Run preparation first for artifact integration checks')
         assignments = {}
@@ -60,6 +61,16 @@ class PreparationTests(unittest.TestCase):
                         self.assertEqual(assignments[row['group_id']], split)
             direction_groups[direction] = groups
         self.assertEqual(direction_groups['text2odrl'], direction_groups['odrl2text'])
+        self.assertFalse((root / 'joint/test.jsonl').exists())
+        for split in ('train', 'validation'):
+            joint = [json.loads(line) for line in (root / 'joint' / f'{split}.jsonl').read_text().splitlines()]
+            expected = []
+            for direction in ('text2odrl', 'odrl2text'):
+                expected.extend(json.loads(line) for line in (root / direction / f'{split}.jsonl').read_text().splitlines())
+            self.assertEqual({r['id'] for r in joint}, {r['id'] for r in expected})
+            self.assertEqual(len(joint), len(expected))
+            for row in joint:
+                self.assertEqual(assignments[row['group_id']], split)
 
 
 if __name__ == '__main__':

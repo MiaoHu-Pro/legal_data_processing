@@ -1,20 +1,23 @@
 # ODRL SFT data preparation
 
-## Slurm preparation and seven-model training
+## Slurm preparation and joint seven-model training
 
-New launchers:
+**Current behavior: seven independent starting models, each trained jointly on text2odrl and odrl2text.** This replaces the earlier 14-run, separate-direction launcher. Do not use the old array indices 7–13.
 
-- `legal_data_process/datasets_processing/run_odrl_sft_data_creation.sh`: CPU preparation, including Qwen tokenization; default destination `datasets/ODRL_SFT-processed-Qwen3` (leaves the existing JSONL-only output untouched).
-- `lex-legal-post-training/scripts/training/submit_train_odrl_sft.sh`: independent ODRL-only SFT runs using the existing `submit_train_sft.sh` and `train_sft.py`.
+- Preparation: `datasets_processing/run_odrl_sft_data_creation.sh` in legal_data_process.
+- Training: `scripts/training/submit_train_odrl_sft.sh` in lex-legal-post-training.
+- Server output root: `datasets/ODRL_SFT-processed-Qwen3-Joint`.
+- Training input: its `joint/` subfolder, containing 7,208 training pairs and 902 validation pairs (50:50 by direction).
+- Evaluation: separate `text2odrl/test_generation.jsonl` and `odrl2text/test_generation.jsonl`. Test examples are excluded from the joint dataset entirely.
 
-Copy/sync the new scripts and `prepare_odrl_sft.py` to the server first. The seven starting models must be fully saved there. Submit preparation, then dependent training with this block (the subshell stops on submission failures):
+Sync the updated preparation Python script and both Bash scripts to the server. Submit CPU preparation and dependent GPU training:
 
 ```bash
 (
     set -euo pipefail
     DATA_PROCESS_ROOT="${HOME}/scratch/legal_data_process"
     PROJECT_ROOT="${HOME}/scratch/dips_project/lex-legal-post-training"
-    ODRL_PREPARED_ROOT="${DATA_PROCESS_ROOT}/datasets/ODRL_SFT-processed-Qwen3"
+    ODRL_PREPARED_ROOT="${DATA_PROCESS_ROOT}/datasets/ODRL_SFT-processed-Qwen3-Joint"
 
     cd "${DATA_PROCESS_ROOT}"
     PREP_JOB_ID="$(sbatch --parsable \
@@ -28,47 +31,33 @@ Copy/sync the new scripts and `prepare_odrl_sft.py` to the server first. The sev
         --dependency="afterok:${PREP_JOB_ID}" \
         --export="ALL,PROJECT_ROOT=${PROJECT_ROOT},ODRL_PREPARED_ROOT=${ODRL_PREPARED_ROOT},CONDA_ENV_NAME=lex_legal_rl_post_training_env" \
         scripts/training/submit_train_odrl_sft.sh)"
-    echo "Dependent ODRL training array: ${TRAIN_JOB_ID}"
+    echo "Joint ODRL training array: ${TRAIN_JOB_ID}"
 )
 ```
 
-Default array `0-13%1` means **14 independent training runs: seven starting models × two separate directions**, with at most one array task running at a time. This does NOT mix both tasks into seven joint models. Use an explicit `--array` option before the script path to select experiments:
+Array `0-6%1` queues seven jobs with at most one running at a time. Each task learns BOTH directions:
 
-| Starting model | text2odrl task | odrl2text task |
-|---|---:|---:|
-| Qwen3-8B-Base | 0 | 7 |
-| CPT Legislation-3B | 1 | 8 |
-| CPT Proportional-5B-FA2 | 2 | 9 |
-| CPT Proportional-10B-95L-5R | 3 | 10 |
-| Legislation-3B-SFT-AllLegal | 4 | 11 |
-| Proportional-5B-FA2-SFT-AllLegal | 5 | 12 |
-| Proportional-10B-95L-5R-SFT-AllLegal | 6 | 13 |
+| Task ID | Starting model |
+|---|---|
+| 0 | Qwen3-8B-Base |
+| 1 | CPT Legislation-3B |
+| 2 | CPT Proportional-5B-FA2 |
+| 3 | CPT Proportional-10B-95L-5R |
+| 4 | Legislation-3B-SFT-AllLegal |
+| 5 | Proportional-5B-FA2-SFT-AllLegal |
+| 6 | Proportional-10B-95L-5R-SFT-AllLegal |
 
-Examples after preparation is complete (run from the training project):
+Final models: `~/scratch/llms_model/lexlegal_llms/odrl-sft-model/<starting-model>-ODRL-SFT`.
+Checkpoints: `~/scratch/llms_model/lexlegal_llms/checkpoints/<starting-model>-ODRL-SFT`.
+Existing input models remain unchanged. `MODEL_ROOT` overrides the model root; optional `ODRL_RUN_SUFFIX` distinguishes repeat runs.
 
-```bash
-# All seven text2odrl models only:
-sbatch --array=0-6%1 scripts/training/submit_train_odrl_sft.sh
+Preparation requests 4 CPU cores, 32 GB, 4 hours, `amd`. Each training job requests four GPUs, 16 CPU cores, 160 GB, 12 hours, `i7_h200`. Training defaults: FlashAttention 2, 3 epochs, learning rate 1e-5, microbatch 1, accumulation 8, max length 4096, save/evaluation every 50 steps, retain two checkpoints. These are starting hyperparameters, not proven optimal settings. The existing trainer reports combined validation loss; separate directional generation evaluation remains a later step. Test data must not be used for selecting settings.
 
-# All seven odrl2text models only:
-sbatch --array=7-13%1 scripts/training/submit_train_odrl_sft.sh
+After preparation, select a single starting model with e.g. `sbatch --array=0 scripts/training/submit_train_odrl_sft.sh`. Use `ODRL_TASK_ID=0 bash scripts/training/submit_train_odrl_sft.sh --dry-run` to inspect paths without submitting. For a smoke training job, pass `--export=ALL,ODRL_RUN_SUFFIX=-smoke` before the script and `--max-steps 5` after it. Extra CLI hyperparameters override defaults. For a failed task, resubmit only its array index with `--resume-from-checkpoint auto`.
 
-# Base model, text2odrl only (a useful first smoke experiment):
-sbatch --array=0 scripts/training/submit_train_odrl_sft.sh --max-steps 5
+Preparation refuses existing output directories. Reuse completed data without resubmitting preparation, or use a fresh output root. The new default avoids overwriting the previous separate-only prepared dataset. Logs are written in the submission directory as `odrl-sft-prepare-<job>.out` and `odrl-sft-<arrayjob>_<task>.out`.
 
-# Inspect a mapping without submission or loading a model:
-ODRL_TASK_ID=10 bash scripts/training/submit_train_odrl_sft.sh --dry-run
-```
-
-Smoke training produces real outputs; set a distinct `ODRL_RUN_SUFFIX=-smoke` via `--export=ALL,ODRL_RUN_SUFFIX=-smoke` when submitting a smoke job, so it does not occupy the full-run destination.
-
-Preparation resources: 4 CPU cores, 32 GB RAM, 4-hour limit, `amd`. Training resources per task: 4 GPUs, 16 CPU cores, 160 GB RAM, 12-hour limit, `i7_h200`. Override Slurm partition/time with `sbatch` options if needed. No GPU is requested for preparation. `%1` limits concurrency, not total disk consumption: fourteen full models and optimizer checkpoints can require substantial quota.
-
-Training defaults are FlashAttention 2, 3 epochs, learning rate `1e-5`, microbatch 1, accumulation 8, length 4096, evaluation/checkpoint every 50 steps, and retention of 2 checkpoints. On four GPUs the effective batch is 32 examples. These are starting settings, not tuned optimal values; choose settings using validation only. Extra training CLI arguments override hyperparameters, e.g. `--attn-implementation sdpa` or `--num-train-epochs 2`. The test split is not used by the trainer.
-
-Outputs: `${MODEL_ROOT}/sft-model/<starting-model>-ODRL-<direction>`, with checkpoints under `${MODEL_ROOT}/checkpoints/<same-name>`. `MODEL_ROOT` defaults to `~/scratch/llms_model/lexlegal_llms`. `ODRL_RUN_SUFFIX` optionally adds a run suffix. The starting checkpoints are not overwritten. For a failed single task, submit just its array index with `--resume-from-checkpoint auto`; do not resume all already-completed tasks indiscriminately. Preparation refuses existing destinations; reuse a completed prepared directory without resubmitting preparation, or choose a new output root for a new configuration.
-
-Logs are in the submission directory: `odrl-sft-prepare-<job>.out` and `odrl-sft-<arrayjob>_<task>.out`. Syntax checks, all 14 dry-run model/direction mappings and the four preprocessing tests passed locally. No Slurm/GPU jobs were submitted or executed locally.
+Local joint JSONL artifacts were created at `datasets/ODRL_SFT-processed-Joint`, leaving earlier artifacts intact. Tests check the combined dataset equals the union of directional train/validation splits and excludes test policies. Real Qwen tokenization and GPU execution must run on the server; no jobs were submitted locally.
 
 ## Scope and completed outputs
 
@@ -183,21 +172,19 @@ Generate the Arrow/tokenizer layout used by the current SFT trainer on the serve
 conda activate lex_legal_rl_post_training_env
 cd "${HOME}/scratch/legal_data_process"
 python datasets_processing/prepare_odrl_sft.py \
-    --output-dir datasets/ODRL_SFT-processed-Qwen3 \
+    --output-dir datasets/ODRL_SFT-processed-Qwen3-Joint \
     --tokenizer-path "${HOME}/scratch/llms_model/lexlegal_llms/base/Qwen3-8B-Base" \
     --training-project "${HOME}/scratch/dips_project/lex-legal-post-training" \
     --max-length 4096
 ```
 
-This rebuilds identical JSONL splits alongside tokenized artifacts. Set `PREPARED_DIR` for the existing training launcher to either:
+This rebuilds identical directional JSONL splits and adds joint training artifacts. The updated ODRL launcher selects:
 
 ```bash
-PREPARED_DIR="${HOME}/scratch/legal_data_process/datasets/ODRL_SFT-processed-Qwen3/text2odrl"
-# OR, for an independent reverse-direction experiment:
-PREPARED_DIR="${HOME}/scratch/legal_data_process/datasets/ODRL_SFT-processed-Qwen3/odrl2text"
+PREPARED_DIR="${HOME}/scratch/legal_data_process/datasets/ODRL_SFT-processed-Qwen3-Joint/joint"
 ```
 
-Use new model/checkpoint output names, e.g. `<starting-model>-ODRL-text2odrl`; never overwrite the seven starting checkpoints. These directions support separate experiments; simply selecting one directory does not jointly train both directions. A joint-task experiment should merge only corresponding train splits, retain the shared held-out groups, and be reported separately.
+The joint directory combines and deterministically shuffles corresponding train and validation splits, retaining the shared held-out groups. No joint test dataset is created: evaluate the two directional test sets separately. Output names are `<starting-model>-ODRL-SFT` under `odrl-sft-model`, not the previous per-direction naming.
 
 The optional tokenizer path calls the existing `configure_tokenizer`, `encode_messages`, and `tokenizer_signature` functions from `src/training/sft_data.py`. Thus it uses the same non-thinking Qwen chat template, supervises only assistant content/end-of-turn, masks user/header tokens with `-100`, and adds no new vocabulary. Overlength examples raise an error instead of truncating ODRL JSON. The trainer checks that each starting model has the identical tokenizer signature. Actual token counts become available in each tokenized manifest; counts here are examples, not tokens.
 

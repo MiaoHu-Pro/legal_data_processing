@@ -132,7 +132,7 @@ def write_jsonl(path, rows):
             handle.write(dump(row) + '\n')
 
 
-def tokenize(output, rows, args):
+def tokenize(output, rows, args, splits=SPLITS):
     # Share the existing trainer's exact template, masking and signature contract.
     sys.path.insert(0, str(args.training_project.expanduser().resolve()))
     from src.training.sft_data import configure_tokenizer, encode_messages, tokenizer_signature
@@ -141,7 +141,7 @@ def tokenize(output, rows, args):
     tokenizer = AutoTokenizer.from_pretrained(str(args.tokenizer_path.expanduser()), local_files_only=True)
     configure_tokenizer(tokenizer)
     datasets, stats = {}, {}
-    for split in SPLITS:
+    for split in splits:
         # Fail instead of silently truncating or changing held-out coverage.
         encoded = [encode_messages(r['messages'], tokenizer, args.max_length) for r in rows if r['split'] == split]
         datasets[split] = Dataset.from_list(encoded)
@@ -173,6 +173,7 @@ def prepare(args):
               'split_policy': 'seeded policy-group shuffle; top-level uid ignored; identical normalized prompts unioned',
               'fractions': {'validation': args.validation_fraction, 'test': args.test_fraction},
               'tokenized': args.tokenizer_path is not None, 'directions': {}}
+    joint_rows = []
     try:
         for direction in DIRECTIONS:
             output = staging / direction
@@ -186,6 +187,7 @@ def prepare(args):
                     unique[identity].update(id=identity, provenance=[])
                 unique[identity]['provenance'].append(row['source'])
             rows = sorted(unique.values(), key=lambda r: digest(f'{args.seed}:{r["id"]}'))
+            joint_rows.extend(r for r in rows if r['split'] != 'test')
             write_jsonl(output / 'source_records.jsonl', selected)
             for split in SPLITS:
                 subset = [r for r in rows if r['split'] == split]
@@ -214,6 +216,20 @@ def prepare(args):
                 manifest.update(tokenize(output, rows, args))
             write_json(output / 'manifest.json', manifest)
             report['directions'][direction] = stats
+        # Joint instruction tuning: both tasks, but no test rows in this dataset.
+        joint_rows.sort(key=lambda r: digest(f'{args.seed}:joint:{r["id"]}'))
+        joint = staging / 'joint'
+        joint.mkdir()
+        for split in ('train', 'validation'):
+            write_jsonl(joint / f'{split}.jsonl', (r for r in joint_rows if r['split'] == split))
+        joint_stats = {split: dict(Counter(r['direction'] for r in joint_rows if r['split'] == split))
+                       for split in ('train', 'validation')}
+        manifest = dict(report, direction='joint', statistics=joint_stats,
+                        tasks=list(DIRECTIONS), test_policy='Separate directional test sets only')
+        if args.tokenizer_path:
+            manifest.update(tokenize(joint, joint_rows, args, splits=('train', 'validation')))
+        write_json(joint / 'manifest.json', manifest)
+        report['joint'] = joint_stats
         write_json(staging / 'manifest.json', report)
         staging.rename(target)
     except Exception:
