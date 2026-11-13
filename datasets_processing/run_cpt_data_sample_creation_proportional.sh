@@ -229,6 +229,7 @@ echo "Finished: $(date --iso-8601=seconds)"
 #      --output-dir datasets/CPT-Proportional-8B-76L-4R \
 #      --resume-from-preprocessed
 
+# get 10B
 #   sbatch datasets_processing/run_cpt_data_sample_creation_proportional.sh \
   #      --total-target-tokens 10000000000 \
   #      --legal-share 0.95 \
