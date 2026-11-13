@@ -7,6 +7,8 @@
     <mapping directory="$PROJECT_DIR$/datasets/SFT-datasets/SlimOrca" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/datasets/SFT-datasets/glaive-code-assistant-v2" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/datasets/SFT-datasets/lawinstruct" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/datasets/SFT-datasets/odrl_data/odrl-to-text-dataset-v1" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/datasets/SFT-datasets/odrl_data/text-to-odrl-dataset-v1" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/datasets/SFT-datasets/ultrachat_200k" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/datasets/SlimPajama-1B" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/datasets/evaluation/legalbench" vcs="Git" />

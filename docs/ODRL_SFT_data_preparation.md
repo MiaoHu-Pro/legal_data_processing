@@ -1,5 +1,75 @@
 # ODRL SFT data preparation
 
+## Slurm preparation and seven-model training
+
+New launchers:
+
+- `legal_data_process/datasets_processing/run_odrl_sft_data_creation.sh`: CPU preparation, including Qwen tokenization; default destination `datasets/ODRL_SFT-processed-Qwen3` (leaves the existing JSONL-only output untouched).
+- `lex-legal-post-training/scripts/training/submit_train_odrl_sft.sh`: independent ODRL-only SFT runs using the existing `submit_train_sft.sh` and `train_sft.py`.
+
+Copy/sync the new scripts and `prepare_odrl_sft.py` to the server first. The seven starting models must be fully saved there. Submit preparation, then dependent training with this block (the subshell stops on submission failures):
+
+```bash
+(
+    set -euo pipefail
+    DATA_PROCESS_ROOT="${HOME}/scratch/legal_data_process"
+    PROJECT_ROOT="${HOME}/scratch/dips_project/lex-legal-post-training"
+    ODRL_PREPARED_ROOT="${DATA_PROCESS_ROOT}/datasets/ODRL_SFT-processed-Qwen3"
+
+    cd "${DATA_PROCESS_ROOT}"
+    PREP_JOB_ID="$(sbatch --parsable \
+        --export="ALL,DATA_PROCESS_ROOT=${DATA_PROCESS_ROOT},TRAINING_PROJECT_ROOT=${PROJECT_ROOT},ODRL_PREPARED_ROOT=${ODRL_PREPARED_ROOT},CONDA_ENV_NAME=lex_legal_rl_post_training_env" \
+        datasets_processing/run_odrl_sft_data_creation.sh)"
+    PREP_JOB_ID="${PREP_JOB_ID%%;*}"
+    echo "Preparation job: ${PREP_JOB_ID}"
+
+    cd "${PROJECT_ROOT}"
+    TRAIN_JOB_ID="$(sbatch --parsable \
+        --dependency="afterok:${PREP_JOB_ID}" \
+        --export="ALL,PROJECT_ROOT=${PROJECT_ROOT},ODRL_PREPARED_ROOT=${ODRL_PREPARED_ROOT},CONDA_ENV_NAME=lex_legal_rl_post_training_env" \
+        scripts/training/submit_train_odrl_sft.sh)"
+    echo "Dependent ODRL training array: ${TRAIN_JOB_ID}"
+)
+```
+
+Default array `0-13%1` means **14 independent training runs: seven starting models × two separate directions**, with at most one array task running at a time. This does NOT mix both tasks into seven joint models. Use an explicit `--array` option before the script path to select experiments:
+
+| Starting model | text2odrl task | odrl2text task |
+|---|---:|---:|
+| Qwen3-8B-Base | 0 | 7 |
+| CPT Legislation-3B | 1 | 8 |
+| CPT Proportional-5B-FA2 | 2 | 9 |
+| CPT Proportional-10B-95L-5R | 3 | 10 |
+| Legislation-3B-SFT-AllLegal | 4 | 11 |
+| Proportional-5B-FA2-SFT-AllLegal | 5 | 12 |
+| Proportional-10B-95L-5R-SFT-AllLegal | 6 | 13 |
+
+Examples after preparation is complete (run from the training project):
+
+```bash
+# All seven text2odrl models only:
+sbatch --array=0-6%1 scripts/training/submit_train_odrl_sft.sh
+
+# All seven odrl2text models only:
+sbatch --array=7-13%1 scripts/training/submit_train_odrl_sft.sh
+
+# Base model, text2odrl only (a useful first smoke experiment):
+sbatch --array=0 scripts/training/submit_train_odrl_sft.sh --max-steps 5
+
+# Inspect a mapping without submission or loading a model:
+ODRL_TASK_ID=10 bash scripts/training/submit_train_odrl_sft.sh --dry-run
+```
+
+Smoke training produces real outputs; set a distinct `ODRL_RUN_SUFFIX=-smoke` via `--export=ALL,ODRL_RUN_SUFFIX=-smoke` when submitting a smoke job, so it does not occupy the full-run destination.
+
+Preparation resources: 4 CPU cores, 32 GB RAM, 4-hour limit, `amd`. Training resources per task: 4 GPUs, 16 CPU cores, 160 GB RAM, 12-hour limit, `i7_h200`. Override Slurm partition/time with `sbatch` options if needed. No GPU is requested for preparation. `%1` limits concurrency, not total disk consumption: fourteen full models and optimizer checkpoints can require substantial quota.
+
+Training defaults are FlashAttention 2, 3 epochs, learning rate `1e-5`, microbatch 1, accumulation 8, length 4096, evaluation/checkpoint every 50 steps, and retention of 2 checkpoints. On four GPUs the effective batch is 32 examples. These are starting settings, not tuned optimal values; choose settings using validation only. Extra training CLI arguments override hyperparameters, e.g. `--attn-implementation sdpa` or `--num-train-epochs 2`. The test split is not used by the trainer.
+
+Outputs: `${MODEL_ROOT}/sft-model/<starting-model>-ODRL-<direction>`, with checkpoints under `${MODEL_ROOT}/checkpoints/<same-name>`. `MODEL_ROOT` defaults to `~/scratch/llms_model/lexlegal_llms`. `ODRL_RUN_SUFFIX` optionally adds a run suffix. The starting checkpoints are not overwritten. For a failed single task, submit just its array index with `--resume-from-checkpoint auto`; do not resume all already-completed tasks indiscriminately. Preparation refuses existing destinations; reuse a completed prepared directory without resubmitting preparation, or choose a new output root for a new configuration.
+
+Logs are in the submission directory: `odrl-sft-prepare-<job>.out` and `odrl-sft-<arrayjob>_<task>.out`. Syntax checks, all 14 dry-run model/direction mappings and the four preprocessing tests passed locally. No Slurm/GPU jobs were submitted or executed locally.
+
 ## Scope and completed outputs
 
 Source: `datasets/SFT-datasets/odrl_data`. Script: `datasets_processing/prepare_odrl_sft.py`.
